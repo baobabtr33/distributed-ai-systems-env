@@ -1,0 +1,112 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jupyter-work
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: standard-rwo
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jupyter
+  labels:
+    app: jupyter
+spec:
+  replicas: 1
+  # The first pull of the 5.3 GB CUDA image can outrun the 600s default, which
+  # fails the rollout even though the pod is fine.
+  progressDeadlineSeconds: 1200
+  strategy:
+    # The PVC is ReadWriteOnce, so the old pod must die before the new one starts.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: jupyter
+  template:
+    metadata:
+      labels:
+        app: jupyter
+    spec:
+      # A Service named "jupyter" makes Kubernetes inject the legacy Docker-link
+      # variable JUPYTER_PORT=tcp://<clusterIP>:8888, and Jupyter Server reads
+      # JUPYTER_PORT as its listen port: ValueError, crashloop. Turn the whole
+      # legacy injection off; nothing here needs it.
+      enableServiceLinks: false
+      # GKE taints GPU nodes so that non-GPU workloads stay off them.
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: present
+          effect: NoSchedule
+      securityContext:
+        # jovyan is uid 1000, group "users" is gid 100 in the Jupyter images.
+        fsGroup: 100
+      containers:
+        - name: jupyter
+          # Jupyter Docker Stacks CUDA build: JupyterLab + PyTorch with CUDA already installed.
+          image: quay.io/jupyter/pytorch-notebook:cuda12-latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: JUPYTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: jupyter-token
+                  key: token
+            # Quiets an NCCL warning on nodes with no InfiniBand.
+            - name: NCCL_IB_DISABLE
+              value: "1"
+            - name: NCCL_DEBUG
+              value: "INFO"
+          ports:
+            - name: http
+              containerPort: 8888
+          resources:
+            requests:
+              cpu: "2"
+              memory: 8Gi
+              nvidia.com/gpu: 1
+            limits:
+              # GPUs cannot be oversubscribed: request and limit must match.
+              memory: 24Gi
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: work
+              mountPath: /home/jovyan/work
+              # Mount a subdirectory, not the volume root, so the filesystem's
+              # lost+found does not show up in the file browser.
+              subPath: work
+            - name: dshm
+              mountPath: /dev/shm
+          readinessProbe:
+            httpGet:
+              path: /api
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: work
+          persistentVolumeClaim:
+            claimName: jupyter-work
+        - name: dshm
+          # PyTorch DataLoader workers need more than the 64 MB default /dev/shm.
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jupyter
+spec:
+  type: ClusterIP
+  selector:
+    app: jupyter
+  ports:
+    - name: http
+      port: 8888
+      targetPort: http

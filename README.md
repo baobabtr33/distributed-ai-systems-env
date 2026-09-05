@@ -7,3 +7,7 @@ inter-node (network) NCCL collective cost.
 **Status:** planning. Nothing provisioned yet.
 
 See [docs/PLAN.md](docs/PLAN.md) for the full design, prerequisites, and build order.
+
+[`sample/`](sample/README.md) is a working `gcloud` + `kubectl` scaffold ahead of the
+Terraform build: one GKE node with one NVIDIA L4, running JupyterLab behind a
+`kubectl port-forward` tunnel. `cd sample && make preflight up jupyter forward`.
