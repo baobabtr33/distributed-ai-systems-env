@@ -116,6 +116,11 @@ That is fine at this size and keeps the cost to a single machine.
 
 ## Notes
 
+- **Orphaned disks.** Deleting a cluster kills the CSI controller before it can reclaim
+  the PersistentVolume, so the PVC's backing disk survives and keeps billing, with nothing
+  in the console linking it back to the deleted cluster. `99-teardown.sh` records the disk
+  before the delete and cleans it up afterwards. Worth confirming with
+  `gcloud compute disks list` regardless.
 - **Cost.** One `g2-standard-8` Spot node runs roughly $0.20–0.30/hr, plus about $0.10/hr
   for the zonal control plane, plus a few cents a day for the 20 GiB PVC. Verify current
   pricing yourself; GCP adjusts Spot rates. `make down` is the only reliable off switch —
