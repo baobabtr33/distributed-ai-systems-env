@@ -1,2 +1,6 @@
 .jupyter-token
 results/
+
+# A local clone of the book examples repository lives here on some machines.
+# The vendored copy at book-examples/ is the tracked one; this is not.
+Distributed-AI-Systems/
