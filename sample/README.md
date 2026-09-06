@@ -114,6 +114,26 @@ sample/
 The cluster has exactly one node pool, so GKE system pods and Jupyter share the GPU node.
 That is fine at this size and keeps the cost to a single machine.
 
+## Measured on real hardware
+
+`00_gpu_smoke_test.ipynb` executed on the provisioned node, 2026-09-06:
+
+| | |
+|---|---|
+| GPU | NVIDIA L4, 22.0 GiB, `sm_89`, 58 SMs |
+| Driver / CUDA | 580.173.02 / 13.0 |
+| PyTorch | 2.11.0+cu128, bf16 supported |
+| bf16 matmul (8192³) | 19.6 ms → **56.2 TFLOP/s**, ~93% of the ~60 TFLOP/s dense peak |
+| NCCL | process group forms, `all_reduce` correct at world size 1 |
+| Node | `g2-standard-8` Spot, 8 vCPU, 31 GiB visible to the pod |
+
+Provisioning took 740s end to end: 479s for the cluster and GPU driver install, 255s for
+the Jupyter rollout including the 5.3 GB image pull.
+
+Note that the L4's headline 121 TFLOP/s bf16 is the sparse figure, requiring 2:4 structured
+sparsity. Dense peak is roughly half that, so 56.2 is close to the practical ceiling rather
+than a disappointing result.
+
 ## Notes
 
 - **Orphaned disks.** Deleting a cluster kills the CSI controller before it can reclaim
