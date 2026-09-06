@@ -13,21 +13,67 @@ else
   QUOTA_CODE="L-DB2E81BA"; QUOTA_LABEL="Running On-Demand G and VT instances"
 fi
 
-VCPUS="$(aws ec2 describe-instance-types --instance-types "${INSTANCE_TYPE}" \
-  --query 'InstanceTypes[0].VCpuInfo.DefaultVCpus' --output text 2>/dev/null || echo "?")"
+# Run a command, and distinguish "it said no" from "I was not allowed to ask".
+# Swallowing an AccessDenied into a default of 0 would report a quota problem
+# that does not exist and send you to the wrong console page.
+try_aws() {
+  local label="$1"; shift
+  local out rc
+  out="$("$@" 2>&1)"; rc=$?
+  if [[ ${rc} -ne 0 ]]; then
+    if grep -qiE "AccessDenied|UnauthorizedOperation|not authorized" <<<"${out}"; then
+      echo "PERMISSION_DENIED"
+    else
+      echo "ERROR"
+    fi
+    return 1
+  fi
+  echo "${out}"
+}
+
+VCPUS="$(try_aws "ec2:DescribeInstanceTypes" \
+  aws ec2 describe-instance-types --instance-types "${INSTANCE_TYPE}" \
+  --query 'InstanceTypes[0].VCpuInfo.DefaultVCpus' --output text)" || VCPUS="PERMISSION_DENIED"
 
 echo
-echo "==> ${INSTANCE_TYPE} needs ${VCPUS} vCPUs of ${QUOTA_LABEL}"
-LIMIT="$(aws service-quotas get-service-quota --service-code ec2 --quota-code "${QUOTA_CODE}" \
-  --query 'Quota.Value' --output text 2>/dev/null || echo "0")"
+echo "==> ${INSTANCE_TYPE} vCPUs: ${VCPUS}  (drawn from: ${QUOTA_LABEL})"
+
+LIMIT="$(try_aws "servicequotas:GetServiceQuota" \
+  aws service-quotas get-service-quota --service-code ec2 --quota-code "${QUOTA_CODE}" \
+  --query 'Quota.Value' --output text)" || LIMIT="PERMISSION_DENIED"
 echo "    quota ${QUOTA_CODE} in ${REGION}: ${LIMIT}"
+
+if [[ "${VCPUS}" == "PERMISSION_DENIED" || "${LIMIT}" == "PERMISSION_DENIED" ]]; then
+  cat >&2 <<MSG
+
+ERROR: these credentials cannot read instance types or service quotas, so this
+check cannot tell you whether you have GPU capacity. That is a permissions
+problem, not a quota problem. A quota of 0 shown above may simply mean the
+value could not be read.
+
+Caller: $(aws sts get-caller-identity --query Arn --output text 2>/dev/null || echo unknown)
+
+The scaffold needs, at minimum:
+  ec2:Describe*                    instance types, images, VPCs, security groups
+  ec2:CreateKeyPair, DeleteKeyPair
+  ec2:CreateSecurityGroup, AuthorizeSecurityGroupIngress, DeleteSecurityGroup
+  ec2:RunInstances, TerminateInstances, CreateTags
+  ssm:GetParameter                 Deep Learning AMI lookup
+  servicequotas:GetServiceQuota, RequestServiceQuotaIncrease
+
+Quickest fix: attach AmazonEC2FullAccess, ServiceQuotasReadOnlyAccess and
+AmazonSSMReadOnlyAccess to this IAM user, or use credentials that already have
+them. See README.md, "IAM permissions".
+MSG
+  exit 1
+fi
 
 echo
 echo "==> GPU instance types offered in ${REGION}"
 aws ec2 describe-instance-type-offerings --location-type region \
   --filters "Name=instance-type,Values=g6.*,g5.*,g4dn.*" \
   --query 'InstanceTypeOfferings[].InstanceType' --output text 2>/dev/null \
-  | tr '\t' '\n' | sort | head -12 | sed 's/^/    /'
+  | tr '\t' '\n' | sort | head -12 | sed 's/^/    /' || echo "    (could not list)"
 
 echo
 if awk "BEGIN{exit !(${LIMIT} >= ${VCPUS})}"; then

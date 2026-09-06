@@ -23,6 +23,65 @@ The instance type matches the GCP run on purpose. Both clouds rent the same NVID
   0 and must request an increase — the same wall as GCP, though AWS usually grants it in
   minutes to a day rather than requiring billing history. `make preflight` reports it.
 
+## IAM permissions
+
+The credentials need more than `sts:GetCallerIdentity`. A locked-down IAM user fails in a
+confusing way: quota lookups return `AccessDenied`, which is easy to misread as "quota is
+zero". `00-preflight.sh` distinguishes the two explicitly.
+
+Quickest route — attach these AWS managed policies to the user:
+
+- `AmazonEC2FullAccess`
+- `ServiceQuotasReadOnlyAccess` (or `ServiceQuotasFullAccess` to request increases)
+- `AmazonSSMReadOnlyAccess` (the Deep Learning AMI lookup)
+
+Least privilege, if you would rather not grant EC2 full access — paste as an inline policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadEC2",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances", "ec2:DescribeInstanceTypes",
+        "ec2:DescribeInstanceTypeOfferings", "ec2:DescribeImages",
+        "ec2:DescribeVpcs", "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups",
+        "ec2:DescribeKeyPairs", "ec2:DescribeVolumes",
+        "ec2:DescribeSpotPriceHistory", "ec2:DescribeTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageScratchGpuBox",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateKeyPair", "ec2:DeleteKeyPair",
+        "ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RunInstances", "ec2:TerminateInstances", "ec2:CreateTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AmiLookupAndQuotas",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "servicequotas:GetServiceQuota", "servicequotas:ListServiceQuotas",
+        "servicequotas:RequestServiceQuotaIncrease"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+`RunInstances` is unrestricted on `Resource` here for simplicity. On a shared account,
+scope it with a condition on `ec2:InstanceType` so these credentials cannot launch
+something far more expensive than a `g6.xlarge`.
+
 ## Run it
 
 ```bash
