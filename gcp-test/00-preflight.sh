@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks the things that most commonly block this sample: APIs and GPU quota.
+# Checks the things that most commonly block this scaffold: APIs and GPU quota.
 source "$(dirname "$0")/config.sh"
 
 echo "==> Enabling required APIs (idempotent)"

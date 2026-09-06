@@ -9,7 +9,7 @@ Vendored copy of the example code from **Distributed AI Systems** (Packt).
 | Retrieved | 2026-09-05 |
 | License | MIT, Copyright (c) 2026 Packt — see `LICENSE` |
 
-This is a read-only reference. Nothing here is wired into `sample/` or the
+This is a read-only reference. Nothing here is wired into `gcp-test/` or the
 Terraform build described in `docs/PLAN.md`; it is checked in so the examples stay
 pinned to a known commit rather than drifting with upstream.
 
@@ -34,7 +34,7 @@ Chapter 7 has no directory upstream — the sequence skips from 6 to 8.
 
 ## Most relevant to this project
 
-- **Chapter 3** — DDP, the same territory as `sample/bench/ddp_allreduce.py` and
+- **Chapter 3** — DDP, the same territory as `gcp-test/bench/ddp_allreduce.py` and
   notebooks 01–03 in `docs/PLAN.md`
 - **Chapter 4** — FSDP, planned as notebook 05
 - **Chapter 10** — benchmarking and profiling methodology

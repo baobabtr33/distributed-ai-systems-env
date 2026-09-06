@@ -1,4 +1,4 @@
-# sample — single GPU node on GKE running JupyterLab
+# gcp-test — single GPU node on GKE running JupyterLab
 
 The smallest thing that proves the environment works: one zonal GKE cluster, one
 `g2-standard-8` node with one NVIDIA L4, and a JupyterLab pod that owns that GPU.
@@ -22,7 +22,7 @@ purpose, so the moving parts are visible before Terraform hides them.
 gcloud auth login
 gcloud config set project YOUR_PROJECT_ID
 
-cd sample
+cd gcp-test
 make preflight     # enables APIs, prints GPU quota
 make up            # creates the cluster + GPU node, ~5-8 min
 make jupyter       # deploys the notebook pod, ~5 min on first image pull
@@ -94,7 +94,7 @@ claims only one GPU — raise `nvidia.com/gpu` in `k8s/jupyter.yaml` to use both
 ## What gets created
 
 ```
-sample/
+gcp-test/
   config.sh              shared vars, sourced by every script
   00-preflight.sh        enable APIs, print GPU quota
   01-create-cluster.sh   create the cluster, wait for the driver to advertise the GPU

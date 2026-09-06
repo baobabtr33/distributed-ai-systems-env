@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Shared configuration for the sample. Override any value by exporting it before
+# Shared configuration for gcp-test. Override any value by exporting it before
 # running a script, e.g.  PROJECT_ID=my-project ./01-create-cluster.sh
 set -euo pipefail
 
 # Required. Falls back to whatever gcloud is currently configured with.
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 
-# Zonal cluster: cheaper and simpler than regional for a single-node sample.
+# Zonal cluster: cheaper and simpler than regional for a single node.
 ZONE="${ZONE:-us-central1-a}"
 REGION="${REGION:-${ZONE%-*}}"
 
