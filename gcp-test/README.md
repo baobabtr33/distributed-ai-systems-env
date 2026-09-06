@@ -8,6 +8,36 @@ This is a scaffold for the multi-node Terraform build described in
 [`../docs/PLAN.md`](../docs/PLAN.md), not part of it. It is `gcloud` + `kubectl` on
 purpose, so the moving parts are visible before Terraform hides them.
 
+## Caveat: GPU quota is the real prerequisite
+
+None of this runs without GPU quota, and on a new billing account you will not have any.
+The blocker is the **billing account's** history, not the project — creating a new project,
+switching organization, or retrying the request changes nothing.
+
+Google's response to a quota request on this project, 2026-09-06:
+
+> We have received your quota request for ai-distributed-systems-2026.
+>
+> Unfortunately, we are unable to grant you additional quota at this time. If this is a
+> new project please wait 48h until you resubmit the request or until your Billing account
+> has additional history.
+
+What that meant in practice here:
+
+| Billing account | Result |
+|---|---|
+| Opened same day, free trial | Every quota frozen. The console offered "a value between 0 and 0", and even a CPU increase from 12 to 24 was refused. |
+| Opened same day, upgraded to paid | Unchanged. Upgrading off the trial is necessary but not sufficient. |
+| Established account with payment history | `GPUS_ALL_REGIONS` auto-granted at 1, regional L4 granted at 1 then raised to 3 on request. Enough for the single-GPU path. |
+
+Requests above the automatic ceiling are refused by the Cloud Quotas API in about two
+seconds — that is an auto-evaluator, not a person reading your justification. The console's
+"a value above 1 will require approval from your service provider" is the path that reaches
+a human; the CLI cannot hand off to one.
+
+So: `01`–`04` need `GPUS_ALL_REGIONS` >= 1 and `05-multi-gpu.sh` needs >= 2, and the second
+one may take a wait of days plus a support case. `make preflight` reports both.
+
 ## Prerequisites
 
 - `gcloud` and `kubectl` on your PATH (`gcloud components install kubectl`)
