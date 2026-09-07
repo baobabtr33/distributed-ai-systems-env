@@ -4,6 +4,8 @@
 # Ubuntu AMI takes 20 minutes of driver compilation for no benefit here.
 source "$(dirname "$0")/config.sh"
 
+require_gpu_quota
+
 # --- key pair -------------------------------------------------------------
 if [[ -f "${KEY_FILE}" ]] && aws ec2 describe-key-pairs --key-names "${KEY_NAME}" >/dev/null 2>&1; then
   echo "==> Key pair ${KEY_NAME} already exists"

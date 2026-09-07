@@ -42,3 +42,65 @@ fi
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 
 echo "account=${ACCOUNT_ID} region=${REGION} type=${INSTANCE_TYPE} spot=${SPOT} name=${NAME}"
+
+# --- helpers shared by the launch scripts ---------------------------------
+
+# G and VT instances draw on a per-region vCPU quota rather than a GPU count.
+# Spot and on-demand are metered separately.
+gpu_quota_code() {
+  if [[ "${SPOT}" == "true" ]]; then echo "L-3819A6DF"; else echo "L-DB2E81BA"; fi
+}
+
+# Check before launching. RunInstances would otherwise fail with
+# VcpuLimitExceeded, which does not say which quota or how much is needed.
+require_gpu_quota() {
+  local code vcpus limit
+  code="$(gpu_quota_code)"
+
+  vcpus="$(aws ec2 describe-instance-types --instance-types "${INSTANCE_TYPE}" \
+    --query 'InstanceTypes[0].VCpuInfo.DefaultVCpus' --output text 2>/dev/null || echo "")"
+  limit="$(aws service-quotas get-service-quota --service-code ec2 --quota-code "${code}" \
+    --query 'Quota.Value' --output text 2>/dev/null || echo "")"
+
+  # An unreadable quota is not the same as a quota of zero. Say so rather than
+  # blocking a launch that might be fine.
+  if [[ -z "${vcpus}" || -z "${limit}" ]]; then
+    echo "WARNING: could not read instance vCPUs or the ${code} quota (permissions?)." >&2
+    echo "         Launching anyway; RunInstances will report the real limit." >&2
+    return 0
+  fi
+
+  echo "Quota ${code} in ${REGION}: ${limit} vCPUs, ${INSTANCE_TYPE} needs ${vcpus}"
+
+  if awk "BEGIN{exit !(${limit} >= ${vcpus})}"; then
+    return 0
+  fi
+
+  local pending
+  pending="$(aws service-quotas list-requested-service-quota-change-history \
+    --service-code ec2 --query "RequestedQuotas[?QuotaCode=='${code}'].[DesiredValue,Status]" \
+    --output text 2>/dev/null | head -1)"
+
+  cat >&2 <<MSG
+
+ERROR: not enough quota to launch a ${INSTANCE_TYPE}.
+
+  need   ${vcpus} vCPUs
+  have   ${limit}
+MSG
+  if [[ -n "${pending}" ]]; then
+    echo "  pending request: ${pending}" >&2
+    echo "" >&2
+    echo "A request is already in the queue. Nothing to do but wait; re-run when it is APPROVED." >&2
+  else
+    cat >&2 <<MSG
+
+Request an increase (free, usually granted within minutes to a day):
+  aws service-quotas request-service-quota-increase \\
+    --service-code ec2 --quota-code ${code} --desired-value ${vcpus}
+MSG
+  fi
+  echo "" >&2
+  echo "Nothing was created, so there is nothing to clean up." >&2
+  return 1
+}
