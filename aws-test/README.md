@@ -66,6 +66,20 @@ Quickest route — attach these AWS managed policies to the user:
 - `ServiceQuotasReadOnlyAccess` (or `ServiceQuotasFullAccess` to request increases)
 - `AmazonSSMReadOnlyAccess` (the Deep Learning AMI lookup)
 
+Spot additionally needs a **service-linked role**, `AWSServiceRoleForEC2Spot`, which AWS
+creates on the account's first Spot request. If the caller cannot create it, `RunInstances`
+fails with:
+
+```
+AuthFailure.ServiceLinkedRoleCreationNotPermitted: The provided credentials do not have
+permission to create the service-linked role for EC2 Spot Instances.
+```
+
+Either have an administrator create the role once, or add `iam:CreateServiceLinkedRole`
+scoped to that one role — included in the policy below. It is a one-time requirement: the
+role persists, and later Spot launches need nothing. Running with `SPOT=false` avoids it
+entirely at roughly three times the price.
+
 Least privilege, if you would rather not grant EC2 full access — paste as an inline policy:
 
 ```json
@@ -94,6 +108,15 @@ Least privilege, if you would rather not grant EC2 full access — paste as an i
         "ec2:RunInstances", "ec2:TerminateInstances", "ec2:CreateTags"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "CreateSpotServiceLinkedRole",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::*:role/aws-service-role/spot.amazonaws.com/AWSServiceRoleForEC2Spot",
+      "Condition": {
+        "StringEquals": { "iam:AWSServiceName": "spot.amazonaws.com" }
+      }
     },
     {
       "Sid": "AmiLookupAndQuotas",
