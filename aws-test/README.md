@@ -23,6 +23,37 @@ The instance type matches the GCP run on purpose. Both clouds rent the same NVID
   0 and must request an increase — the same wall as GCP, though AWS usually grants it in
   minutes to a day rather than requiring billing history. `make preflight` reports it.
 
+## Caveat: the Free Plan cannot launch GPU instances
+
+AWS accounts created under the current free-tier model start on a **Free Plan**, which
+restricts EC2 to free-tier-eligible instance types. `RunInstances` on a GPU type fails
+before quota is ever consulted:
+
+```
+InvalidParameterCombination: The specified instance type is not eligible for Free Tier.
+For a list of Free Tier instance types, run 'describe-instance-types' with the filter
+'free-tier-eligible=true'.
+```
+
+The eligible list contains no GPU at all — `t3.micro`, `t3.small`, `t4g.micro`,
+`t4g.small`, `c7i-flex.large`, `m7i-flex.large`. So this is not something a quota increase
+fixes; the account must be upgraded to a paid plan first, in
+**Billing and Cost Management → Account → upgrade to a paid plan**. Free-tier credits carry
+over.
+
+This is the same shape as the GCP blocker recorded in
+[`../gcp-test/README.md`](../gcp-test/README.md): a new account cannot reach GPUs until
+billing is upgraded. The difference is what comes after. On GCP, upgrading is necessary but
+not sufficient — quota then depends on the billing account's payment history, which took a
+separate account with prior invoices to satisfy. On AWS the G-instance vCPU quota is a
+normal service-quota request, usually granted in minutes to a day.
+
+Check the quota once the account is upgraded:
+
+```bash
+make preflight
+```
+
 ## IAM permissions
 
 The credentials need more than `sts:GetCallerIdentity`. A locked-down IAM user fails in a
