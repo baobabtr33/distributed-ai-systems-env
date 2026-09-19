@@ -1,0 +1,103 @@
+# Indexed Job that runs torchrun across the GPU pool. Notebooks submit this
+# through the Kubernetes API using the RBAC the jupyter module grants.
+#
+# Substitute and apply:
+#   sed -e 's|{{SCRIPT}}|train_ddp_cifar10.py|' \
+#       -e 's|{{NNODES}}|2|' -e 's|{{NPROC}}|2|' \
+#       -e 's|{{BUCKET}}|my-project-dai-artifacts|' \
+#       jobs/torchrun-job.yaml | kubectl apply -n dai -f -
+#
+# Rendezvous is c10d over the headless Service below: the indexed pod
+# ddp-train-0 gets a stable DNS name through the subdomain, and every rank
+# dials it.
+#
+# Volumes are split by access pattern, because Jupyter's PVC is ReadWriteOnce
+# and unreachable from these nodes:
+#   /work       the chapter-3 scripts, straight from the ConfigMap, read-only
+#   /artifacts  the GCS bucket Jupyter also mounts, for traces and checkpoints
+apiVersion: v1
+kind: Service
+metadata:
+  name: ddp-rdzv
+spec:
+  clusterIP: None # headless: gives each pod a stable DNS name
+  selector:
+    job-name: ddp-train
+  ports:
+    - name: rdzv
+      port: 29500
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ddp-train
+spec:
+  completionMode: Indexed # JOB_COMPLETION_INDEX becomes the node rank
+  completions: {{NNODES}}
+  parallelism: {{NNODES}} # every rank must be running at once or rendezvous stalls
+  backoffLimit: 0 # a preempted Spot node should surface, not silently retry
+  template:
+    metadata:
+      labels:
+        job-name: ddp-train
+      annotations:
+        gke-gcsfuse/volumes: "true"
+    spec:
+      # Grants the bucket access through Workload Identity.
+      serviceAccountName: jupyter
+      subdomain: ddp-rdzv
+      restartPolicy: Never
+      nodeSelector:
+        role: gpu
+      tolerations:
+        - key: nvidia.com/gpu
+          value: present
+          effect: NoSchedule
+      containers:
+        - name: trainer
+          image: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              # The scripts write traces and ./data relative to cwd; point that
+              # at the shared bucket so rank 0's trace outlives the pod.
+              mkdir -p /artifacts/${JOB_COMPLETION_INDEX}
+              cd /artifacts/${JOB_COMPLETION_INDEX}
+              torchrun \
+                --nnodes={{NNODES}} \
+                --nproc_per_node={{NPROC}} \
+                --node_rank=${JOB_COMPLETION_INDEX} \
+                --rdzv_backend=c10d \
+                --rdzv_endpoint=ddp-train-0.ddp-rdzv:29500 \
+                /work/{{SCRIPT}}
+          env:
+            # Without this NCCL picks an interface at random and inter-node
+            # rendezvous hangs or falls back to something slow.
+            - name: NCCL_SOCKET_IFNAME
+              value: eth0
+            - name: NCCL_IB_DISABLE
+              value: "1" # no InfiniBand on g2
+            - name: NCCL_DEBUG
+              value: INFO
+          resources:
+            limits:
+              # One GPU per local rank. torchrun spawns NPROC processes and each
+              # takes a device, so this must equal --nproc_per_node.
+              nvidia.com/gpu: {{NPROC}}
+          volumeMounts:
+            - name: scripts
+              mountPath: /work
+              readOnly: true
+            - name: artifacts
+              mountPath: /artifacts
+      volumes:
+        - name: scripts
+          configMap:
+            name: chapter3-scripts
+        - name: artifacts
+          csi:
+            driver: gcsfuse.csi.storage.gke.io
+            volumeAttributes:
+              bucketName: "{{BUCKET}}"
+              mountOptions: "implicit-dirs"
