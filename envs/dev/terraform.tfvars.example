@@ -1,0 +1,21 @@
+# cp terraform.tfvars.example terraform.tfvars and fill in.
+
+project_id = "your-project-id"
+zone       = "us-central1-a"
+
+# Your own address, from `curl -s https://checkip.amazonaws.com`. Required: an
+# empty list denies every external address rather than allowing them, so the
+# cluster would come up with no way to reach its API server.
+authorized_cidrs = ["203.0.113.4/32"]
+
+# Idle by default. Scale by editing these two and re-applying:
+#   1 node  x 2 GPU  intra-node (PCIe)
+#   2 nodes x 1 GPU  inter-node (gVNIC)
+#   2 nodes x 2 GPU  both
+node_count    = 0
+gpus_per_node = 2
+spot          = true
+
+# Optional; empty skips the budget module.
+billing_account = ""
+budget_amount   = 50

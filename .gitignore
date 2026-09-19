@@ -1,0 +1,19 @@
+# Terraform
+.terraform/
+# .terraform.lock.hcl is deliberately committed: it pins provider versions
+# so a later apply resolves the same google provider this was validated against.
+*.tfstate
+*.tfstate.*
+crash.log
+terraform.tfvars
+*.auto.tfvars
+
+# Notebook and training output
+.ipynb_checkpoints/
+__pycache__/
+notebooks/data/
+*.json.gz
+ddp_trace.json
+ddp_overlap_trace.json
+ddp_multinode_rank0.json
+resnet50_ddp_trace.json
