@@ -30,6 +30,25 @@ def log(rank, *a):
         print(*a, flush=True)
 
 
+def pick_amp_dtype():
+    """bf16 where the hardware has it, fp16 otherwise.
+
+    The T4 in a g4dn is sm_75, which predates bf16: autocast would fall back to
+    a software path and the step time would measure that rather than the GPU.
+    fp16 has the same 16-bit tensor-core throughput on that generation, so the
+    comparison against an L4 or A10G stays meaningful for step time even though
+    the numerics differ.
+    """
+    # including_emulation=False is load-bearing: torch.cuda.is_bf16_supported()
+    # defaults to counting the emulated path, so it answers True on an sm_75 T4
+    # and autocast then measures software bf16 rather than the tensor cores.
+    return (
+        torch.bfloat16
+        if torch.cuda.is_bf16_supported(including_emulation=False)
+        else torch.float16
+    )
+
+
 def bench_allreduce(rank, world_size, device, sizes_mb, iters=20, warmup=5):
     rows = []
     for mb in sizes_mb:
@@ -74,7 +93,8 @@ class Block(nn.Module):
 
 
 def bench_ddp(rank, world_size, device, d=1024, layers=8, batch=16, seq=512,
-              iters=20, warmup=5):
+              iters=20, warmup=5, amp_dtype=None):
+    amp_dtype = amp_dtype or pick_amp_dtype()
     torch.manual_seed(0)
     model = nn.Sequential(*[Block(d) for _ in range(layers)]).to(device)
     if world_size > 1:
@@ -86,7 +106,7 @@ def bench_ddp(rank, world_size, device, d=1024, layers=8, batch=16, seq=512,
 
     def step():
         opt.zero_grad(set_to_none=True)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.autocast("cuda", dtype=amp_dtype):
             loss = model(x).square().mean()
         loss.backward()
         opt.step()
@@ -105,6 +125,7 @@ def bench_ddp(rank, world_size, device, d=1024, layers=8, batch=16, seq=512,
 
     local_tokens = batch * seq
     return {"params_m": params / 1e6, "step_ms": per_step * 1e3,
+            "amp_dtype": str(amp_dtype).replace("torch.", ""),
             "tokens_per_s_per_gpu": local_tokens / per_step,
             "tokens_per_s_total": local_tokens * world_size / per_step,
             "peak_mem_gib": torch.cuda.max_memory_allocated(device) / 1024**3}
@@ -123,12 +144,12 @@ def main():
     world_size = int(os.environ.get("WORLD_SIZE", 1))
 
     if not torch.cuda.is_available():
-        sys.exit("no CUDA device visible to rank %d. On GKE this means the pod has "
-                 "no nvidia.com/gpu resource, or the node's driver is still "
-                 "installing." % rank)
+        sys.exit("no CUDA device visible to rank %d. On this instance that means "
+                 "the NVIDIA driver did not load; check `nvidia-smi` over SSH."
+                 % rank)
     if local_rank >= torch.cuda.device_count():
         sys.exit("local_rank %d but only %d GPU(s) visible: --nproc_per_node exceeds "
-                 "the pod's GPU allocation." % (local_rank, torch.cuda.device_count()))
+                 "the GPUs on this instance." % (local_rank, torch.cuda.device_count()))
 
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
@@ -148,6 +169,8 @@ def main():
 
     log(rank, "\nDDP step:")
     ddp = bench_ddp(rank, world_size, device)
+    log(rank, "  autocast      %s%s" % (ddp["amp_dtype"],
+        "" if ddp["amp_dtype"] == "bfloat16" else "  (no bf16 on this GPU)"))
     log(rank, "  params        %.1f M" % ddp["params_m"])
     log(rank, "  step time     %.2f ms" % ddp["step_ms"])
     log(rank, "  tokens/s/gpu  %.0f" % ddp["tokens_per_s_per_gpu"])
