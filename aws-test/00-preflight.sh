@@ -2,9 +2,11 @@
 # Checks the thing that most commonly blocks this: the G-instance vCPU quota.
 #
 # AWS does not meter GPUs directly. G and VT instances draw on a single vCPU
-# quota per region, so a g6.xlarge needs 4 vCPUs of "Running On-Demand G and VT
-# Instances" (quota L-DB2E81BA), or the Spot equivalent (L-3819A6DF). A new
-# account is frequently at 0 and must request an increase, exactly like GCP.
+# quota per region, so a g4dn.12xlarge needs 48 vCPUs of "Running On-Demand G
+# and VT Instances" (quota L-DB2E81BA), or the Spot equivalent (L-3819A6DF).
+# A new account is frequently at 0 and must request an increase, exactly like
+# GCP. Note the quota is vCPUs, not GPUs: going from one GPU to four is a 4-vCPU
+# request turning into a 48-vCPU one, which is a slower review.
 source "$(dirname "$0")/config.sh"
 
 if [[ "${SPOT}" == "true" ]]; then
@@ -69,13 +71,37 @@ MSG
 fi
 
 echo
-echo "==> GPU instance types offered in ${REGION}"
-aws ec2 describe-instance-type-offerings --location-type region \
-  --filters "Name=instance-type,Values=g6.*,g5.*,g4dn.*" \
-  --query 'InstanceTypeOfferings[].InstanceType' --output text 2>/dev/null \
-  | tr '\t' '\n' | sort | head -12 | sed 's/^/    /' || echo "    (could not list)"
+echo "==> Four-GPU types offered in ${REGION}, cheapest Spot zone each"
+# An alphabetical dump of every g* offering buries the ones that matter, and
+# .12xlarge sorts after .16xlarge. List the four-GPU types explicitly, with the
+# price actually on offer rather than the on-demand list price.
+for t in g4dn.12xlarge g6.12xlarge g5.12xlarge g6e.12xlarge; do
+  offered="$(aws ec2 describe-instance-type-offerings --location-type region \
+    --filters "Name=instance-type,Values=${t}" \
+    --query 'InstanceTypeOfferings[0].InstanceType' --output text 2>/dev/null)"
+  if [[ "${offered}" != "${t}" ]]; then
+    printf '    %-15s not offered here\n' "${t}"
+    continue
+  fi
+  read -r price az < <(aws ec2 describe-spot-price-history --instance-types "${t}" \
+    --product-descriptions "Linux/UNIX" --start-time "$(date -u +%Y-%m-%dT%H:%M:%S)" \
+    --query 'SpotPriceHistory[].[SpotPrice,AvailabilityZone]' --output text 2>/dev/null \
+    | sort -g | head -1) || true
+  gpu="$(aws ec2 describe-instance-types --instance-types "${t}" \
+    --query 'InstanceTypes[0].GpuInfo.Gpus[0].Name' --output text 2>/dev/null)"
+  printf '    %-15s 4x %-5s  %s/hr in %s\n' "${t}" "${gpu:-?}" \
+    "\$${price:-?}" "${az:-?}"
+done
 
 echo
+PENDING="$(aws service-quotas list-requested-service-quota-change-history \
+  --service-code ec2 --query "RequestedQuotas[?QuotaCode=='${QUOTA_CODE}'].[DesiredValue,Status,Created]" \
+  --output text 2>/dev/null | head -1)"
+if [[ -n "${PENDING}" ]]; then
+  echo "==> Pending increase request for ${QUOTA_CODE}: ${PENDING}"
+  echo
+fi
+
 if awk "BEGIN{exit !(${LIMIT} >= ${VCPUS})}"; then
   echo "OK: quota is sufficient to launch one ${INSTANCE_TYPE}."
 else
@@ -84,6 +110,12 @@ ERROR: not enough quota to launch a ${INSTANCE_TYPE}.
 
   need   ${VCPUS} vCPUs
   have   ${LIMIT}
+$(if [[ -n "${PENDING}" ]]; then
+    echo "  pending ${PENDING}"
+    echo ""
+    echo "A request is already open. Check its DesiredValue covers ${VCPUS} vCPUs -"
+    echo "a request for 4 unlocks a 1-GPU .xlarge, not a 4-GPU .12xlarge."
+  fi)
 
 Request an increase (free, usually granted within minutes to a day):
   https://${REGION}.console.aws.amazon.com/servicequotas/home/services/ec2/quotas/${QUOTA_CODE}

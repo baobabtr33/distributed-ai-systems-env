@@ -17,7 +17,8 @@ def main(baseline_path, scaled_path):
     base, scaled = load(baseline_path), load(scaled_path)
     n = scaled["world_size"]
 
-    print("device: %s" % scaled["device"])
+    print("device: %s x%d" % (scaled["device"], n))
+    print("autocast: %s" % scaled["ddp"].get("amp_dtype", "unknown"))
     print()
 
     if scaled["allreduce"]:

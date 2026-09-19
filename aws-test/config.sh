@@ -9,11 +9,25 @@ export AWS_PROFILE
 REGION="${REGION:-us-east-1}"
 export AWS_DEFAULT_REGION="${REGION}"
 
-# g6.xlarge = 1x NVIDIA L4 (24 GB), 4 vCPU, 16 GB RAM. Deliberately the same GPU
-# as the GKE run in ../gcp-test, so the throughput numbers are comparable.
-#   g5.xlarge  = 1x A10G (24 GB)  - faster, usually easier quota
-#   g4dn.xlarge = 1x T4 (16 GB)   - cheapest, no bf16
-INSTANCE_TYPE="${INSTANCE_TYPE:-g6.xlarge}"
+# g4dn.12xlarge = 4x NVIDIA T4 (16 GB each), 48 vCPU, 192 GB RAM. The cheapest
+# way to get four GPUs on one node, which is what the DDP and AllReduce numbers
+# in bench/ need. Note the T4 is sm_75: no bf16, so bench/ and the notebook fall
+# back to fp16 (see pick_amp_dtype in bench/ddp_allreduce.py).
+#
+# Four GPUs, us-east-1 Spot at the time of writing:
+#   g4dn.12xlarge  4x T4    64 GB total   $1.63/hr   no bf16
+#   g6.12xlarge    4x L4    90 GB total   $1.85/hr   same GPU as ../gcp-test
+#   g5.12xlarge    4x A10G  90 GB total   $1.98/hr
+#   g6e.12xlarge   4x L40S 179 GB total   $6.35/hr
+# One GPU, 4 vCPU of quota instead of 48:
+#   g4dn.xlarge / g6.xlarge / g5.xlarge
+#
+# Smallest GPU footprint AWS sells, and so the smallest possible quota request:
+#   g6f.large    2 vCPU, 8 GB RAM, a fractional L4 with 2861 MiB of VRAM,
+#                $0.049/hr Spot in us-east-1d. Half the quota of a g4dn.xlarge.
+#                Enough for the notebook's smoke test; bench/ needs smaller
+#                dimensions than the defaults to fit in 2.8 GB.
+INSTANCE_TYPE="${INSTANCE_TYPE:-g4dn.12xlarge}"
 
 # Spot is roughly a third of on-demand but can be reclaimed with 2 minutes' notice.
 SPOT="${SPOT:-true}"
@@ -55,6 +69,19 @@ gpu_quota_code() {
 # VcpuLimitExceeded, which does not say which quota or how much is needed.
 require_gpu_quota() {
   local code vcpus limit
+
+  # Only G and VT types draw on this bucket. A CPU type is metered against the
+  # Standard quota, so checking the G/VT limit for one blocks a launch that
+  # would have succeeded - which is exactly what happens when the scaffold is
+  # run on a cheap CPU instance while the GPU quota case is still open.
+  case "${INSTANCE_TYPE}" in
+    g*|vt*) ;;
+    *)
+      echo "==> ${INSTANCE_TYPE} is not a G or VT type; skipping the GPU quota check"
+      return 0
+      ;;
+  esac
+
   code="$(gpu_quota_code)"
 
   vcpus="$(aws ec2 describe-instance-types --instance-types "${INSTANCE_TYPE}" \
@@ -103,4 +130,32 @@ MSG
   echo "" >&2
   echo "Nothing was created, so there is nothing to clean up." >&2
   return 1
+}
+
+# Spot prices for the same instance type differ by availability zone, and the
+# spread is not small: at the time of writing g6.12xlarge was $1.85/hr in
+# us-east-1f and $4.33/hr in us-east-1d. RunInstances without a subnet picks a
+# zone for you, so pin it to the cheapest one that has a default subnet.
+# Echoes an empty string if the price history or the subnet list is unreadable,
+# which the caller treats as "let AWS choose".
+cheapest_spot_subnet() {
+  local az_prices az subnet
+  az_prices="$(aws ec2 describe-spot-price-history \
+    --instance-types "${INSTANCE_TYPE}" --product-descriptions "Linux/UNIX" \
+    --start-time "$(date -u +%Y-%m-%dT%H:%M:%S)" \
+    --query 'SpotPriceHistory[].[SpotPrice,AvailabilityZone]' \
+    --output text 2>/dev/null | sort -g)" || return 0
+  [[ -z "${az_prices}" ]] && return 0
+
+  # Walk cheapest-first; the cheapest zone is no use without a subnet in it.
+  while read -r price az; do
+    [[ -z "${az}" ]] && continue
+    subnet="$(aws ec2 describe-subnets \
+      --filters "Name=availability-zone,Values=${az}" "Name=default-for-az,Values=true" \
+      --query 'Subnets[0].SubnetId' --output text 2>/dev/null)"
+    if [[ -n "${subnet}" && "${subnet}" != "None" ]]; then
+      echo "${subnet} ${az} ${price}"
+      return 0
+    fi
+  done <<<"${az_prices}"
 }

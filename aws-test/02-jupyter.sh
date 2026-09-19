@@ -26,7 +26,10 @@ scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "${KEY_FIL
 echo "==> Starting JupyterLab bound to 127.0.0.1"
 # --ip=127.0.0.1 matters: without it Jupyter listens on all interfaces, and the
 # only thing keeping it private would be the security group.
-"${SSH[@]}" "pkill -f jupyter-lab || true; \
+# The bracket makes the pattern not match the shell running it: `pkill -f
+# jupyter-lab` sees "jupyter-lab" in its own command line and kills itself,
+# so nothing after it ever runs and no log file is created.
+"${SSH[@]}" "pkill -f '[j]upyter-lab' || true; \
   source /opt/pytorch/bin/activate 2>/dev/null || true; \
   nohup jupyter lab --no-browser --ip=127.0.0.1 --port=8888 \
     --IdentityProvider.token='${TOKEN}' \

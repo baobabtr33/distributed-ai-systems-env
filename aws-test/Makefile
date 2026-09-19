@@ -3,13 +3,14 @@
 
 SHELL := /bin/bash
 
-.PHONY: help preflight up jupyter tunnel status ssh logs down all
+.PHONY: help preflight up jupyter tunnel bench status ssh logs down all
 
 help:
 	@echo "make preflight - check G-instance vCPU quota and Spot price"
 	@echo "make up        - launch the GPU instance, wait for SSH, run nvidia-smi"
 	@echo "make jupyter   - install JupyterLab, copy notebooks, start it on localhost"
 	@echo "make tunnel    - SSH tunnel to Jupyter, prints the URL with token"
+	@echo "make bench     - 1-GPU baseline vs all-GPU DDP run, prints scaling"
 	@echo "make all       - preflight + up + jupyter"
 	@echo "make status    - instance id, state, type, public IP"
 	@echo "make ssh       - shell on the instance"
@@ -27,6 +28,9 @@ jupyter:
 
 tunnel:
 	./03-tunnel.sh
+
+bench:
+	./04-bench.sh
 
 all: preflight up jupyter
 
