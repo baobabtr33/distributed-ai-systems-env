@@ -19,6 +19,7 @@ re-run this script after changing the .py to refresh the notebook.
 """
 import argparse
 import ast
+import hashlib
 import pathlib
 import sys
 
@@ -116,6 +117,14 @@ def convert(py_path):
         ),
     ]
     cells += [new_code_cell(c) for c in split_source(src)]
+
+    # nbformat assigns a random id to every cell, which would make this script
+    # rewrite all 13 notebooks on every run and show 13 files changed in a diff
+    # that contains no actual change. Derive the id from the script name and the
+    # cell's position instead, so regenerating an unchanged .py is a no-op.
+    for i, cell in enumerate(cells):
+        seed = "%s:%d" % (py_path.name, i)
+        cell["id"] = hashlib.sha256(seed.encode()).hexdigest()[:8]
 
     nb = new_notebook(cells=cells, metadata={
         "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
